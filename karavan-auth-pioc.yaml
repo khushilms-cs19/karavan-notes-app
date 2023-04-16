@@ -1,0 +1,374 @@
+apiVersion: camel.apache.org/v1
+kind: Integration
+metadata:
+  name: karavan-auth-pioc
+spec:
+  flows:
+    - restConfiguration:
+        dataFormatProperty:
+          - value: 'true'
+            key: prettyPrint
+        component: undertow
+        scheme: http
+        host: '{{notes_744.hostname}}'
+        port: '{{notes_744.port}}'
+        contextPath: /notes_744
+        apiContextPath: /notes_744
+        bindingMode: 'off'
+        enableCors: true
+        apiComponent: openapi
+    - rest:
+        post:
+          - path: /register
+            to: direct:register
+            consumes: application/json
+            produces: application/json
+            bindingMode: 'off'
+        get:
+          - param:
+              - name: username
+                type: header
+                dataType: string
+              - name: password
+                type: header
+                dataType: string
+            path: /login
+            to: direct:authenticate
+            consumes: application/json
+            produces: application/json
+            bindingMode: 'off'
+          - param:
+              - name: access_token
+                type: header
+            path: /authorize
+            to: direct:authorize
+            consumes: application/json
+            produces: application/json
+            bindingMode: 'off'
+        path: /auth-service
+        consumes: application/json
+        produces: application/json
+        bindingMode: 'off'
+        enableCors: true
+    - route:
+        from:
+          uri: direct:authenticate
+          steps:
+            - doTry:
+                steps:
+                  - bean:
+                      ref: loginBean
+                      method: getUserCredentials
+                  - removeHeaders:
+                      pattern: '*'
+                  - setHeader:
+                      name: Accept
+                      expression:
+                        constant:
+                          expression: application/json
+                  - setBody:
+                      expression:
+                        simple:
+                          expression: >-
+                            client_id={{notes_744.client-id}}&client_secret={{notes_744.client-secret}}&username=${exchangeProperty[username]}&password=${exchangeProperty[password]}&grant_type={{notes_744.auth-grant-type}}
+                  - setHeader:
+                      name: Content-Type
+                      expression:
+                        constant:
+                          expression: application/x-www-form-urlencoded
+                  - doTry:
+                      steps:
+                        - to:
+                            uri: http://{{notes_744.token-endpoint}}
+                            parameters:
+                              bridgeEndpoint: true
+                              httpMethod: POST
+                      doCatch:
+                        - steps:
+                            - setHeader:
+                                name: Exchange.HTTP_RESPONSE_CODE
+                                expression:
+                                  simple:
+                                    expression: '404'
+                            - setBody:
+                                expression:
+                                  simple:
+                                    expression: >-
+                                      {
+
+                                      "message": "username does not exist  or
+                                      password does not match"
+
+                                      }
+                          exception:
+                            - >-
+                              org.apache.camel.http.base.HttpOperationFailedException
+                doCatch:
+                  - steps:
+                      - setHeader:
+                          name: Exchange.HTTP_RESPONSE_CODE
+                          expression:
+                            simple:
+                              expression: '400'
+                      - setBody:
+                          expression:
+                            simple:
+                              expression: |-
+                                {
+                                "message": "username or password is undefined"
+                                }
+                    exception:
+                      - java.lang.RuntimeException
+        id: AuthN
+    - route:
+        from:
+          uri: direct:authorize
+          steps:
+            - doTry:
+                steps:
+                  - bean:
+                      ref: loginBean
+                      method: getAccessToken
+                  - setBody:
+                      expression:
+                        simple:
+                          expression: >-
+                            token=${exchangeProperty[access_token]}&client_id={{notes_744.client-id}}&client_secret={{notes_744.client-secret}}
+                  - removeHeaders:
+                      pattern: '*'
+                  - setHeader:
+                      name: Accept
+                      expression:
+                        simple:
+                          expression: application/json
+                  - setHeader:
+                      name: Content-Type
+                      expression:
+                        simple:
+                          expression: application/x-www-form-urlencoded
+                  - to:
+                      uri: http://{{notes_744.introspect-token-endpoint}}
+                      parameters:
+                        bridgeEndpoint: true
+                        httpMethod: POST
+                  - bean:
+                      ref: loginBean
+                      method: checkIfExpired
+                  - choice:
+                      when:
+                        - expression:
+                            simple:
+                              expression: ${exchangeProperty[active]} == "true"
+                          steps:
+                            - log:
+                                message: '`ureka`'
+                                loggingLevel: INFO
+                      otherwise:
+                        steps:
+                          - log:
+                              message: '{typeof(${exchangeProperty[active]})}'
+                              loggingLevel: INFO
+                          - removeHeaders:
+                              pattern: '*'
+                          - setHeader:
+                              name: Content-Type
+                              expression:
+                                constant:
+                                  expression: application/x-www-form-urlencoded
+                          - setHeader:
+                              name: Accept
+                              expression:
+                                simple:
+                                  expression: application/json
+                          - setBody:
+                              expression:
+                                simple:
+                                  expression: >-
+                                    client_id={{notes_744.client-id}}&client_secret={{notes_744.client-secret}}&refresh_token=${exchangeProperty[refresh_token]}&grant_type={{notes_744.refresh_token}}
+                          - bean:
+                              ref: loginBean
+                              method: debug
+                          - to:
+                              uri: http://{{notes_744.token-endpoint}}
+                              parameters:
+                                bridgeEndpoint: true
+                                httpMethod: POST
+                doCatch:
+                  - steps:
+                      - setHeader:
+                          name: Exchange.HTTP_RESPONSE_CODE
+                          expression:
+                            simple:
+                              expression: '401'
+                      - setBody:
+                          expression:
+                            simple:
+                              expression: >-
+                                {
+
+                                "message": "Unauthorized , access_token orn
+                                refresh_token is missing"
+
+                                }
+                    exception:
+                      - java.lang.RuntimeException
+                      - java.lang.NullPointerException
+                  - steps:
+                      - setHeader:
+                          name: Exchange.HTTP_RESPONSE_CODE
+                          expression:
+                            simple:
+                              expression: '401'
+                      - setBody:
+                          expression:
+                            simple:
+                              expression: |-
+                                {
+                                    "error": "invalid_request",
+                                    "error_description": "Authentication failed."
+                                }
+                    exception:
+                      - org.apache.camel.http.base.HttpOperationFailedException
+        id: AuthZ
+    - route:
+        from:
+          uri: direct:register
+          steps:
+            - doTry:
+                steps:
+                  - bean:
+                      ref: loginBean
+                      method: getUserCredentialsFromBody
+                  - setHeader:
+                      name: Content-Type
+                      expression:
+                        simple:
+                          expression: application/x-www-form-urlencoded
+                  - setHeader:
+                      name: Accept
+                      expression:
+                        simple:
+                          expression: application/json
+                  - setBody:
+                      expression:
+                        simple:
+                          expression: >-
+                            client_id={{notes_744.client-id}}&client_secret={{notes_744.client-secret}}&grant_type={{notes_744.grant-type}}
+                  - doTry:
+                      steps:
+                        - to:
+                            uri: http://{{notes_744.token-endpoint}}
+                            parameters:
+                              bridgeEndpoint: true
+                              httpMethod: POST
+                        - bean:
+                            ref: loginBean
+                            method: getAccessTokenFromBody
+                        - setHeader:
+                            name: Authorization
+                            expression:
+                              simple:
+                                expression: Bearer ${exchangeProperty[accessToken]}
+                        - setHeader:
+                            name: Content-Type
+                            expression:
+                              simple:
+                                expression: application/json
+                        - setHeader:
+                            name: Accept
+                            expression:
+                              simple:
+                                expression: application/json
+                        - setBody:
+                            expression:
+                              simple:
+                                expression: ${exchangeProperty[newUserJson]}
+                        - doTry:
+                            steps:
+                              - to:
+                                  uri: http://{{notes_744.add-user-endpoint}}
+                                  parameters:
+                                    bridgeEndpoint: true
+                                    httpMethod: POST
+                              - setBody:
+                                  expression:
+                                    simple:
+                                      expression: >-
+                                        {
+
+                                        "message": "user registered
+                                        successfully"
+
+                                        }
+                            doCatch:
+                              - steps:
+                                  - setHeader:
+                                      name: Exchange.HTTP_RESPONSE_CODE
+                                      expression:
+                                        simple:
+                                          expression: '409'
+                                  - setBody:
+                                      expression:
+                                        simple:
+                                          expression: |-
+                                            {
+                                                "errorMessage": "User exists with same username"
+                                            }
+                                exception:
+                                  - >-
+                                    org.apache.camel.http.base.HttpOperationFailedException
+                      doCatch:
+                        - steps:
+                            - setHeader:
+                                name: Exchange.HTTP_RESPONSE_CODE
+                                expression:
+                                  simple:
+                                    expression: '500'
+                            - setBody:
+                                expression:
+                                  simple:
+                                    expression: >-
+                                      {
+
+                                      "message": "The KeyCloak Server
+                                      encountered internal server error or
+                                      misconfiguration unabe to complete your
+                                      request"
+
+                                      }
+                          exception:
+                            - org.apache.http.NoHttpResponseException
+                        - steps:
+                            - setHeader:
+                                name: Exchange.HTTP_RESPONSE_CODE
+                                expression:
+                                  simple:
+                                    expression: '401'
+                            - setBody:
+                                expression:
+                                  simple:
+                                    expression: |-
+                                      {
+                                          "error": "invalid_client",
+                                          "error_description": "Invalid client or Invalid client credentials"
+                                      }
+                          exception:
+                            - >-
+                              org.apache.camel.http.base.HttpOperationFailedException
+                doCatch:
+                  - steps:
+                      - setHeader:
+                          name: Exchange.HTTP_RESPONSE_CODE
+                          expression:
+                            simple:
+                              expression: '400'
+                      - setBody:
+                          expression:
+                            simple:
+                              expression: |-
+                                {
+                                "message": "username or password is undefined"
+                                }
+                    exception:
+                      - java.lang.RuntimeException
+        description: Register
