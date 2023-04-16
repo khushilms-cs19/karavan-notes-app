@@ -50,6 +50,37 @@ spec:
         produces: application/json
         bindingMode: 'off'
         enableCors: true
+    - rest:
+        post:
+          - path: /notes
+            to: direct:createNote
+            consumes: application/json
+            produces: application/json
+            bindingMode: 'off'
+        get:
+          - param:
+              - name: title
+                type: query
+                required: false
+                dataType: string
+              - name: category
+                type: query
+                required: false
+                dataType: string
+            path: /notes
+            to: direct:getAllNotes
+            bindingMode: 'off'
+            consumes: application/json
+            produces: application/json
+          - param:
+              - name: id
+                type: path
+            path: /notes/{id}
+            to: direct:getNoteById
+            consumes: application/json
+            produces: application/json
+            bindingMode: 'off'
+        path: /notes-service
     - route:
         from:
           uri: direct:authenticate
@@ -394,3 +425,677 @@ spec:
                     exception:
                       - java.lang.RuntimeException
         description: Register
+    - route:
+        from:
+          uri: direct:getAllNotes
+          steps:
+            - bean:
+                ref: notesBean
+                method: setQueryParams
+            - doTry:
+                steps:
+                  - bean:
+                      ref: loginBean
+                      method: getAccessToken
+                  - setBody:
+                      expression:
+                        simple:
+                          expression: >-
+                            token=${exchangeProperty[access_token]}&client_id={{notes_744.client-id}}&client_secret={{notes_744.client-secret}}
+                  - removeHeaders:
+                      pattern: '*'
+                  - setHeader:
+                      name: Accept
+                      expression:
+                        simple:
+                          expression: application/json
+                  - setHeader:
+                      name: Content-Type
+                      expression:
+                        simple:
+                          expression: application/x-www-form-urlencoded
+                  - to:
+                      uri: http://{{notes_744.introspect-token-endpoint}}
+                      parameters:
+                        bridgeEndpoint: true
+                        httpMethod: POST
+                  - bean:
+                      ref: loginBean
+                      method: checkIfExpired
+                  - log:
+                      message: body:${body}
+                      loggingLevel: INFO
+                  - choice:
+                      when:
+                        - expression:
+                            simple:
+                              expression: ${exchangeProperty[active]} == "true"
+                          steps:
+                            - bean:
+                                ref: loginBean
+                                method: getUserId
+                            - log:
+                                message: '''body:${body}'''
+                                loggingLevel: INFO
+                            - bean:
+                                ref: notesBean
+                                method: getAllNotes
+                            - doTry:
+                                steps:
+                                  - choice:
+                                      when:
+                                        - expression:
+                                            method:
+                                              ref: notesBean
+                                              method: checkCategoryInBody
+                                          steps:
+                                            - marshal:
+                                                json:
+                                                  library: jackson
+                                            - to:
+                                                uri: kamelet:mysql-sink
+                                                parameters:
+                                                  serverName: '{{notes-service.hostname}}'
+                                                  serverPort: '{{notes-service.database.port}}'
+                                                  username: root
+                                                  password: password
+                                                  query: >-
+                                                    select * from notes where category like
+                                                    CONCAT('%',:#category,'%');
+                                                  databaseName: notesdb
+                                        - expression:
+                                            method:
+                                              ref: notesBean
+                                              method: checkTitleInBody
+                                          steps:
+                                            - marshal:
+                                                json:
+                                                  library: jackson
+                                            - to:
+                                                uri: kamelet:mysql-sink
+                                                parameters:
+                                                  serverName: '{{notes-service.hostname}}'
+                                                  serverPort: '{{notes-service.database.port}}'
+                                                  username: root
+                                                  password: password
+                                                  query: >-
+                                                    select * from notes where title like
+                                                    CONCAT('%',:#title,'%')
+                                                  databaseName: notesdb
+                                      otherwise:
+                                        steps:
+                                          - marshal:
+                                              json:
+                                                library: jackson
+                                          - to:
+                                              uri: kamelet:mysql-sink
+                                              parameters:
+                                                serverName: '{{notes-service.hostname}}'
+                                                serverPort: '{{notes-service.database.port}}'
+                                                username: root
+                                                password: password
+                                                query: select * from notes;
+                                                databaseName: notesdb
+                                doCatch:
+                                  - steps:
+                                      - setHeader:
+                                          name: message
+                                          expression:
+                                            simple:
+                                              expression: MySql Connection Error
+                                      - setHeader:
+                                          name: responseCode
+                                          expression:
+                                            simple:
+                                              expression: '500'
+                                      - bean:
+                                          ref: notesBean
+                                          method: sendMessage
+                                    exception:
+                                      - java.sql.SQLException
+                            - choice:
+                                when:
+                                  - expression:
+                                      simple:
+                                        expression: ${body.size} == 0
+                                    steps:
+                                      - setHeader:
+                                          name: message
+                                          expression:
+                                            simple:
+                                              expression: Notes not found
+                                      - setHeader:
+                                          name: responseCode
+                                          expression:
+                                            simple:
+                                              expression: '404'
+                                      - bean:
+                                          ref: notesBean
+                                          method: sendMessage
+                            - marshal:
+                                json:
+                                  library: jackson
+                      otherwise:
+                        steps:
+                          - removeHeaders:
+                              pattern: '*'
+                          - setHeader:
+                              name: Content-Type
+                              expression:
+                                constant:
+                                  expression: application/x-www-form-urlencoded
+                          - setHeader:
+                              name: Accept
+                              expression:
+                                simple:
+                                  expression: application/json
+                          - setBody:
+                              expression:
+                                simple:
+                                  expression: >-
+                                    client_id={{notes_744.client-id}}&client_secret={{notes_744.client-secret}}&refresh_token=${exchangeProperty[refresh_token]}&grant_type={{notes_744.refresh_token}}
+                          - to:
+                              uri: http://{{notes_744.token-endpoint}}
+                              parameters:
+                                bridgeEndpoint: true
+                                httpMethod: POST
+                          - removeHeaders:
+                              pattern: '*'
+                          - bean:
+                              ref: loginBean
+                              method: getAccessTokenFromBody
+                          - setBody:
+                              expression:
+                                simple:
+                                  expression: >-
+                                    token=${exchangeProperty[accessToken]}&client_id={{notes_744.client-id}}&client_secret={{notes_744.client-secret}}
+                          - setHeader:
+                              name: Content-Type
+                              expression:
+                                simple:
+                                  expression: application/x-www-form-urlencoded
+                          - setHeader:
+                              name: Accept
+                              expression:
+                                simple:
+                                  expression: application/json
+                          - to:
+                              uri: http://{{notes_744.introspect-token-endpoint}}
+                              parameters:
+                                bridgeEndpoint: true
+                                httpMethod: POST
+                          - bean:
+                              ref: loginBean
+                              method: getUserId
+                doCatch:
+                  - steps:
+                      - log:
+                          message: ${exception}
+                      - setHeader:
+                          name: Exchange.HTTP_RESPONSE_CODE
+                          expression:
+                            simple:
+                              expression: '401'
+                      - setBody:
+                          expression:
+                            simple:
+                              expression: >-
+                                {
+
+                                "message": "Unauthorized , access_token or
+                                refresh_token is missing"
+
+                                }
+                    exception:
+                      - java.lang.RuntimeException
+                      - java.lang.NullPointerException
+                  - steps:
+                      - log:
+                          message: ${exception}
+                          loggingLevel: INFO
+                      - setHeader:
+                          name: Exchange.HTTP_RESPONSE_CODE
+                          expression:
+                            simple:
+                              expression: '401'
+                      - setBody:
+                          expression:
+                            simple:
+                              expression: |-
+                                {
+                                    "error": "invalid_request",
+                                    "error_description": "Authentication failed."
+                                }
+                    exception:
+                      - org.apache.camel.http.base.HttpOperationFailedException
+        id: getAllNotes
+    - route:
+        from:
+          uri: direct:getNoteById
+          steps:
+            - bean:
+                ref: notesBean
+                method: setNoteId
+            - doTry:
+                steps:
+                  - bean:
+                      ref: loginBean
+                      method: getAccessToken
+                  - setBody:
+                      expression:
+                        simple:
+                          expression: >-
+                            token=${exchangeProperty[access_token]}&client_id={{notes_744.client-id}}&client_secret={{notes_744.client-secret}}
+                  - removeHeaders:
+                      pattern: '*'
+                  - setHeader:
+                      name: Accept
+                      expression:
+                        simple:
+                          expression: application/json
+                  - setHeader:
+                      name: Content-Type
+                      expression:
+                        simple:
+                          expression: application/x-www-form-urlencoded
+                  - to:
+                      uri: http://{{notes_744.introspect-token-endpoint}}
+                      parameters:
+                        bridgeEndpoint: true
+                        httpMethod: POST
+                  - bean:
+                      ref: loginBean
+                      method: checkIfExpired
+                  - log:
+                      message: ${body}
+                      loggingLevel: INFO
+                  - choice:
+                      when:
+                        - expression:
+                            simple:
+                              expression: ${exchangeProperty[active]} == "true"
+                          steps:
+                            - bean:
+                                ref: loginBean
+                                method: getUserId
+                            - doTry:
+                                steps:
+                                  - bean:
+                                      ref: notesBean
+                                      method: getNoteById
+                                  - marshal:
+                                      json:
+                                        library: jackson
+                                  - to:
+                                      uri: kamelet:mysql-sink
+                                      parameters:
+                                        serverName: '{{notes-service.hostname}}'
+                                        serverPort: '{{notes-service.database.port}}'
+                                        username: root
+                                        password: password
+                                        query: select * from notes where noteId=:#id;
+                                        databaseName: notesdb
+                                  - choice:
+                                      when:
+                                        - expression:
+                                            simple:
+                                              expression: ${body.size} == 0
+                                              resultType: boolean
+                                          steps:
+                                            - setHeader:
+                                                name: message
+                                                expression:
+                                                  simple:
+                                                    expression: No note found
+                                            - setHeader:
+                                                name: responseCode
+                                                expression:
+                                                  simple:
+                                                    expression: '404'
+                                            - bean:
+                                                ref: notesBean
+                                                method: sendMessage
+                                doCatch:
+                                  - steps:
+                                      - setHeader:
+                                          name: message
+                                          expression:
+                                            simple:
+                                              expression: MySql Connection Error
+                                      - setHeader:
+                                          name: responseCode
+                                          expression:
+                                            simple:
+                                              expression: '500'
+                                      - bean:
+                                          ref: notesBean
+                                          method: sendMessage
+                                    exception:
+                                      - java.sql.SQLException
+                            - marshal:
+                                json:
+                                  library: jackson
+                      otherwise:
+                        steps:
+                          - removeHeaders:
+                              pattern: '*'
+                          - setHeader:
+                              name: Content-Type
+                              expression:
+                                constant:
+                                  expression: application/x-www-form-urlencoded
+                          - setHeader:
+                              name: Accept
+                              expression:
+                                simple:
+                                  expression: application/json
+                          - setBody:
+                              expression:
+                                simple:
+                                  expression: >-
+                                    client_id={{notes_744.client-id}}&client_secret={{notes_744.client-secret}}&refresh_token=${exchangeProperty[refresh_token]}&grant_type={{notes_744.refresh_token}}
+                          - to:
+                              uri: http://{{notes_744.token-endpoint}}
+                              parameters:
+                                bridgeEndpoint: true
+                                httpMethod: POST
+                          - removeHeaders:
+                              pattern: '*'
+                          - bean:
+                              ref: loginBean
+                              method: getAccessTokenFromBody
+                          - setBody:
+                              expression:
+                                simple:
+                                  expression: >-
+                                    token=${exchangeProperty[accessToken]}&client_id={{notes_744.client-id}}&client_secret={{notes_744.client-secret}}
+                          - setHeader:
+                              name: Content-Type
+                              expression:
+                                simple:
+                                  expression: application/x-www-form-urlencoded
+                          - setHeader:
+                              name: Accept
+                              expression:
+                                simple:
+                                  expression: application/json
+                          - to:
+                              uri: http://{{notes_744.introspect-token-endpoint}}
+                              parameters:
+                                bridgeEndpoint: true
+                                httpMethod: POST
+                          - bean:
+                              ref: loginBean
+                              method: getUserId
+                doCatch:
+                  - steps:
+                      - log:
+                          message: ${exception}
+                          loggingLevel: INFO
+                      - setHeader:
+                          name: Exchange.HTTP_RESPONSE_CODE
+                          expression:
+                            simple:
+                              expression: '401'
+                      - setBody:
+                          expression:
+                            simple:
+                              expression: >-
+                                {
+
+                                "message": "Unauthorized , access_token or
+                                refresh_token is missing"
+
+                                }
+                    exception:
+                      - java.lang.RuntimeException
+                      - java.lang.NullPointerException
+                  - steps:
+                      - log:
+                          message: ${exception}
+                          loggingLevel: INFO
+                      - setHeader:
+                          name: Exchange.HTTP_RESPONSE_CODE
+                          expression:
+                            simple:
+                              expression: '401'
+                      - setBody:
+                          expression:
+                            simple:
+                              expression: |-
+                                {
+                                    "error": "invalid_request",
+                                    "error_description": "Authentication failed."
+                                }
+                    exception:
+                      - org.apache.camel.http.base.HttpOperationFailedException
+        id: getNoteById
+    - route:
+        from:
+          uri: direct:createNote
+          steps:
+            - bean:
+                ref: notesBean
+                method: setNoteBody
+            - doTry:
+                steps:
+                  - bean:
+                      ref: loginBean
+                      method: getAccessToken
+                  - setBody:
+                      expression:
+                        simple:
+                          expression: >-
+                            token=${exchangeProperty[access_token]}&client_id={{notes_744.client-id}}&client_secret={{notes_744.client-secret}}
+                  - removeHeaders:
+                      pattern: '*'
+                  - setHeader:
+                      name: Accept
+                      expression:
+                        simple:
+                          expression: application/json
+                  - setHeader:
+                      name: Content-Type
+                      expression:
+                        simple:
+                          expression: application/x-www-form-urlencoded
+                  - to:
+                      uri: http://{{notes_744.introspect-token-endpoint}}
+                      parameters:
+                        bridgeEndpoint: true
+                        httpMethod: POST
+                  - bean:
+                      ref: loginBean
+                      method: checkIfExpired
+                  - choice:
+                      when:
+                        - expression:
+                            simple:
+                              expression: ${exchangeProperty[active]} == "true"
+                          steps:
+                            - bean:
+                                ref: loginBean
+                                method: getUserId
+                            - log:
+                                message: '''Received Body: ${body}`'
+                                loggingLevel: INFO
+                            - doTry:
+                                steps:
+                                  - bean:
+                                      ref: notesBean
+                                      method: createNote
+                                  - marshal:
+                                      json:
+                                        library: jackson
+                                  - to:
+                                      uri: kamelet:mysql-sink
+                                      parameters:
+                                        serverName: '{{notes-service.hostname}}'
+                                        serverPort: '{{notes-service.database.port}}'
+                                        username: root
+                                        password: password
+                                        query: >-
+                                          insert into notes(userId, title,
+                                          category, body) values (:#userId,
+                                          :#title, :#category, :#body);
+                                        databaseName: notesdb
+                                  - setHeader:
+                                      name: message
+                                      expression:
+                                        simple:
+                                          expression: Note created
+                                  - setHeader:
+                                      name: responseCode
+                                      expression:
+                                        simple:
+                                          expression: '201'
+                                  - bean:
+                                      ref: notesBean
+                                      method: sendMessage
+                                doCatch:
+                                  - steps:
+                                      - setHeader:
+                                          name: message
+                                          expression:
+                                            simple:
+                                              expression: Note with same title already exists
+                                      - setHeader:
+                                          name: responseCode
+                                          expression:
+                                            simple:
+                                              expression: '403'
+                                      - bean:
+                                          ref: notesBean
+                                          method: sendMessage
+                                    exception:
+                                      - >-
+                                        java.sql.SQLIntegrityConstraintViolationException
+                                  - steps:
+                                      - setHeader:
+                                          name: message
+                                          expression:
+                                            simple:
+                                              expression: MySql Connection Error
+                                      - setHeader:
+                                          name: responseCode
+                                          expression:
+                                            simple:
+                                              expression: '500'
+                                      - bean:
+                                          ref: notesBean
+                                          method: sendMessage
+                                    exception:
+                                      - java.sql.SQLException
+                                  - steps:
+                                      - setHeader:
+                                          name: message
+                                          expression:
+                                            simple:
+                                              expression: Required fields are not present
+                                      - setHeader:
+                                          name: responseCode
+                                          expression:
+                                            simple:
+                                              expression: '400'
+                                      - bean:
+                                          ref: notesBean
+                                          method: sendErrorResponse
+                                    exception:
+                                      - java.lang.Exception
+                            - marshal:
+                                json: {}
+                      otherwise:
+                        steps:
+                          - removeHeaders:
+                              pattern: '*'
+                          - setHeader:
+                              name: Content-Type
+                              expression:
+                                constant:
+                                  expression: application/x-www-form-urlencoded
+                          - setHeader:
+                              name: Accept
+                              expression:
+                                simple:
+                                  expression: application/json
+                          - setBody:
+                              expression:
+                                simple:
+                                  expression: >-
+                                    client_id={{notes_744.client-id}}&client_secret={{notes_744.client-secret}}&refresh_token=${exchangeProperty[refresh_token]}&grant_type={{notes_744.refresh_token}}
+                          - to:
+                              uri: http://{{notes_744.token-endpoint}}
+                              parameters:
+                                bridgeEndpoint: true
+                                httpMethod: POST
+                          - removeHeaders:
+                              pattern: '*'
+                          - bean:
+                              ref: loginBean
+                              method: getAccessTokenFromBody
+                          - setBody:
+                              expression:
+                                simple:
+                                  expression: >-
+                                    token=${exchangeProperty[accessToken]}&client_id={{notes_744.client-id}}&client_secret={{notes_744.client-secret}}
+                          - setHeader:
+                              name: Content-Type
+                              expression:
+                                simple:
+                                  expression: application/x-www-form-urlencoded
+                          - setHeader:
+                              name: Accept
+                              expression:
+                                simple:
+                                  expression: application/json
+                          - to:
+                              uri: http://{{notes_744.introspect-token-endpoint}}
+                              parameters:
+                                bridgeEndpoint: true
+                                httpMethod: POST
+                          - bean:
+                              ref: loginBean
+                              method: getUserId
+                doCatch:
+                  - steps:
+                      - log:
+                          message: ${exception}
+                          loggingLevel: INFO
+                      - setHeader:
+                          name: Exchange.HTTP_RESPONSE_CODE
+                          expression:
+                            simple:
+                              expression: '401'
+                      - setBody:
+                          expression:
+                            simple:
+                              expression: >-
+                                {
+
+                                "message": "Unauthorized , access_token or
+                                refresh_token is missing"
+
+                                }
+                    exception:
+                      - java.lang.RuntimeException
+                      - java.lang.NullPointerException
+                  - steps:
+                      - log:
+                          message: ${exception}
+                          loggingLevel: INFO
+                      - setHeader:
+                          name: Exchange.HTTP_RESPONSE_CODE
+                          expression:
+                            simple:
+                              expression: '401'
+                      - setBody:
+                          expression:
+                            simple:
+                              expression: |-
+                                {
+                                    "error": "invalid_request",
+                                    "error_description": "Authentication failed."
+                                }
+                    exception:
+                      - org.apache.camel.http.base.HttpOperationFailedException
+        id: createNote
