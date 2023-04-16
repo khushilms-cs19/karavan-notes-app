@@ -78,20 +78,23 @@ public class Login {
        String responseAfterIntrospect =  exchange.getIn().getBody(String.class);
        Gson gson = new Gson();
        Map<String, String> responseMap = gson.fromJson(responseAfterIntrospect, Map.class);
-       System.out.println(responseMap);
        exchange.setProperty("active", responseMap.get("active"));
     }
 
-    public void getRefreshToken(Exchange exchange){
-      System.out.println(exchange.getProperty("refresh_token"));
+    public void getUserId(Exchange exchange){
+        String responseAfterAuth =  exchange.getIn().getBody(String.class);
+        Gson gson = new Gson();
+        Map<String, String> responseMap = gson.fromJson(responseAfterAuth, Map.class);
+        exchange.setProperty("userId", responseMap.get("sub"));
+        System.out.println("User id is: " + responseMap.get("sub"));
     }
 
-    public void debug(Exchange exchange){
-        System.out.println((exchange.getProperty("active").toString()=="false"));
-        String requestBody = exchange.getIn().getBody(String.class);
-        System.out.println(requestBody + "here");
-        System.out.println("here in");
-    }
+    // public void getAccessTokenFromBody(Exchange exchange){
+    //     String requestBody = exchange.getIn().getBody(String.class);
+    //     Gson gson = new Gson();
+    //     Map<String, String> requestBodyMap = gson.fromJson(requestBody, Map.class);
+    //     exchange.setProperty("access_token", requestBodyMap.get("access_token"));
+    // }
 
     public void getAccessTokenFromBody(Exchange exchange){
         String requestBody = exchange.getIn().getBody(String.class);

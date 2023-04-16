@@ -160,14 +160,11 @@ spec:
                             simple:
                               expression: ${exchangeProperty[active]} == "true"
                           steps:
-                            - log:
-                                message: '`ureka`'
-                                loggingLevel: INFO
+                            - bean:
+                                ref: loginBean
+                                method: getUserId
                       otherwise:
                         steps:
-                          - log:
-                              message: '{typeof(${exchangeProperty[active]})}'
-                              loggingLevel: INFO
                           - removeHeaders:
                               pattern: '*'
                           - setHeader:
@@ -185,14 +182,39 @@ spec:
                                 simple:
                                   expression: >-
                                     client_id={{notes_744.client-id}}&client_secret={{notes_744.client-secret}}&refresh_token=${exchangeProperty[refresh_token]}&grant_type={{notes_744.refresh_token}}
-                          - bean:
-                              ref: loginBean
-                              method: debug
                           - to:
                               uri: http://{{notes_744.token-endpoint}}
                               parameters:
                                 bridgeEndpoint: true
                                 httpMethod: POST
+                          - removeHeaders:
+                              pattern: '*'
+                          - bean:
+                              ref: loginBean
+                              method: getAccessTokenFromBody
+                          - setBody:
+                              expression:
+                                simple:
+                                  expression: >-
+                                    token=${exchangeProperty[accessToken]}&client_id={{notes_744.client-id}}&client_secret={{notes_744.client-secret}}
+                          - setHeader:
+                              name: Content-Type
+                              expression:
+                                simple:
+                                  expression: application/x-www-form-urlencoded
+                          - setHeader:
+                              name: Accept
+                              expression:
+                                simple:
+                                  expression: application/json
+                          - to:
+                              uri: http://{{notes_744.introspect-token-endpoint}}
+                              parameters:
+                                bridgeEndpoint: true
+                                httpMethod: POST
+                          - bean:
+                              ref: loginBean
+                              method: getUserId
                 doCatch:
                   - steps:
                       - setHeader:
@@ -206,7 +228,7 @@ spec:
                               expression: >-
                                 {
 
-                                "message": "Unauthorized , access_token orn
+                                "message": "Unauthorized , access_token or
                                 refresh_token is missing"
 
                                 }
