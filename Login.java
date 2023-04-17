@@ -84,7 +84,11 @@ public class Login {
         Gson gson = new Gson();
         Map<String, String> responseMap = gson.fromJson(responseAfterAuth, Map.class);
         exchange.setProperty("userId", responseMap.get("sub"));
-        System.out.println("User id is: " + responseMap.get("sub"));
+        exchange.setProperty("authorized", "true");
+    }
+
+    public void unauthorizedMessage(Exchange exchange) {
+        exchange.setProperty("authorized", "false");
     }
 
     // public void getAccessTokenFromBody(Exchange exchange){

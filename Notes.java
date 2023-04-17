@@ -13,7 +13,7 @@ import java.lang.*;
 @Named("notesBean")
 @BindToRegistry("notesBean")
 public class Notes {
-    private static final String[] fields = { "title", "category", "body", "userId" };
+    private static final String[] fields = { "title", "category", "body" };
 
     public boolean checkFields(HashMap<String, Object> note) {
         for (String field : fields) {
@@ -47,6 +47,7 @@ public class Notes {
 
     public void setNoteBody(Exchange exchange) throws Exception {
         String body = exchange.getIn().getBody(String.class);
+        System.out.println(body);
         HashMap<String, Object> note = new Gson().fromJson(body, HashMap.class);
         if (this.checkFields(note)) {
             for (String field : fields) {
@@ -62,7 +63,9 @@ public class Notes {
         for (String field : fields) {
             newNote.put(field, exchange.getProperty(field));
         }
+        newNote.put("userId", exchange.getProperty("userId"));
         System.out.println(newNote);
+
         return newNote;
     }
 
@@ -79,19 +82,11 @@ public class Notes {
     }
 
     public HashMap<String, Object> updateWholeNote(Exchange exchange) {
-        String path = exchange.getIn().getHeader(Exchange.HTTP_PATH).toString();
-        String[] pathArray = path.split("/");
-        String id = pathArray[pathArray.length - 1];
-        String body = exchange.getIn().getBody(String.class);
-        HashMap<String, Object> note = new Gson().fromJson(body, HashMap.class);
         HashMap<String, Object> newNote = new HashMap<String, Object>();
-        if (this.checkFields(note)) {
-            for (String field : fields) {
-                exchange.setProperty(field, note.get(field));
-            }
+        for (String field : fields) {
+            exchange.setProperty(field, newNote.get(field));
         }
-        exchange.setProperty("id", Integer.parseInt(id));
-        return note;
+        return newNote;
     }
 
     public void updatePartialNote(Exchange exchange) throws Exception {
